@@ -5,6 +5,8 @@ package main
 // --------------------------------------------------
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -88,6 +90,32 @@ func timer(name string) func() {
 	}
 }
 
+func toJSON(data any) []byte {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false) // Disables escaping of &, <, and >
+
+	if err := enc.Encode(data); err != nil {
+		panic(err)
+	}
+
+	return buf.Bytes()
+}
+
+// --------------------------------------------------
+// JSON shi
+// --------------------------------------------------
+
+type AllURLItems struct {
+	AllURLItems []URLItem `json:"urls"`
+}
+
+type URLItem struct {
+	URL       string   `json:"url"`
+	Links     []string `json:"links"`
+	ScrapedAt int64    `json:"scrapedAt"`
+}
+
 // --------------------------------------------------
 // The actual main code stuff
 // --------------------------------------------------
@@ -109,8 +137,9 @@ var start = time.Now()
 func main() {
 
 	// if we dont scrape 1 url first, it gives an index out of range later for some reason
-	_, URLs, err := Scrape(URLs[0])
-	URLs = removeFromSlice(URLs, 0)
+	_, newURLs, err := Scrape(URLs[0])
+	newURLs = removeFromSlice(newURLs, 0)
+	URLs = append(URLs, newURLs...)
 	doneURLs = append(doneURLs, URLs[0])
 
 	if err {
@@ -148,10 +177,10 @@ func main() {
 				// remove processed URL from queue and add to doneURLs
 				URLs = removeFromSlice(URLs, i)
 				doneURLs = append(doneURLs, URL)
+				u := URLItem{URL, newURLs, 1}
+				saveUrlItem(u)
 				clear()
-				print("ELAPSED: " + time.Since(start).Round(10*time.Millisecond).String())
-				print("DONE:    " + strconv.Itoa(len(doneURLs)))
-				print("QUEUED:  " + strconv.Itoa(len(URLs)))
+				printStats()
 				sleep(200)
 			}
 		}
@@ -216,4 +245,29 @@ func Scrape(URL string) (string, []string, bool) {
 
 	return title, foundURLs, false
 
+}
+
+func saveUrlItem(u URLItem) {
+
+	dat, err := os.ReadFile("test.json")
+
+	if err != nil {
+		log.Fatal("failed to read file")
+	}
+
+	aui := AllURLItems{}
+
+	err = json.Unmarshal(dat, &aui)
+
+	if err != nil {
+		print("error with unmarshalling, continueing with an empty start aui")
+	}
+
+	aui.AllURLItems = append(aui.AllURLItems, u)
+
+	b := toJSON(aui)
+	err = os.WriteFile("test.json", b, 0644)
+	if err != nil {
+		log.Fatal("failed to write to file")
+	}
 }
