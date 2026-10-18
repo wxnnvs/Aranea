@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -40,8 +41,6 @@ func clear() {
 		runCmd("clear")
 	case "linux":
 		runCmd("clear")
-	case "windows":
-		runCmd("cmd", "/c", "cls")
 	default:
 		runCmd("clear")
 	}
@@ -49,6 +48,11 @@ func clear() {
 
 func print(msg string) {
 	fmt.Println(msg)
+}
+
+// print as log
+func printl(msg string) {
+	log.Print(msg)
 }
 
 func goofyprint(msg string) { // print without newline
@@ -77,7 +81,7 @@ func printStats() {
 }
 
 // go has no built-in functionality for removing an element from a slice
-func removeFromSlice(a []string, i int) []string {
+func removeFromSliceByIndex(a []string, i int) []string {
 	a = append(a[:i], a[i+1:]...)
 	return a
 }
@@ -102,6 +106,39 @@ func toJSON(data any) []byte {
 	return buf.Bytes()
 }
 
+// normalizeURL canonicalizes a URL so equivalent forms compare equal.
+// Returns ok=false if the URL is not http(s) or can't be parsed.
+func normalizeURL(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", false
+	}
+	if u.Host == "" {
+		return "", false
+	}
+
+	u.Fragment = ""
+	u.Host = strings.ToLower(u.Host)
+
+	// Drop default ports.
+	if (u.Scheme == "http" && strings.HasSuffix(u.Host, ":80")) ||
+		(u.Scheme == "https" && strings.HasSuffix(u.Host, ":443")) {
+		u.Host = u.Host[:strings.LastIndex(u.Host, ":")]
+	}
+
+	// Collapse trailing slash: "/" and "" are the same; "/foo/" and "/foo" are the same.
+	if u.Path == "/" {
+		u.Path = ""
+	} else {
+		u.Path = strings.TrimSuffix(u.Path, "/")
+	}
+
+	return u.String(), true
+}
+
 // --------------------------------------------------
 // JSON shi
 // --------------------------------------------------
@@ -111,6 +148,7 @@ type AllURLItems struct {
 }
 
 type URLItem struct {
+	Title     string   `json:"title"`
 	URL       string   `json:"url"`
 	Links     []string `json:"links"`
 	ScrapedAt int64    `json:"scrapedAt"`
@@ -120,72 +158,165 @@ type URLItem struct {
 // The actual main code stuff
 // --------------------------------------------------
 
-var stop = false
+var (
+	stop = false
+	// URLs = []string{"http://localhost:8000"}
+	// URLs = []string{"https://github.com/hackerkid/Mind-Expanding-Books"}
+	URLs = []string{"https://awesome-poetry.top/huajianji/"}
 
-// it first does all newfound links instead of doing github, google, youtube, reddit, new links, ...
-var URLs = []string{
-	"https://github.com",
-	"https://google.com",
-	"https://youtube.com",
-	"https://reddit.com",
+	// for this PoC we skip uninteresting sources
+
+	blacklisted = []string{
+		"github.com/login",
+		"github.com/mcp",
+		"github.com/features",
+		"github.com/signup",
+		"github.com/contact",
+		"github.com/resources",
+		".github.com",
+		"github.com/solutions",
+		"/blob/",
+		"/tree/",
+		"githubusercontent.com",
+		"google.com",
+		"github.com/security",
+		"github.com/why-github",
+		"github.com/blog",
+		"github.com/marketplace",
+		"github.com/enterprise",
+		"github.com/team",
+		"github.com/customer-stories",
+		"github.com/orgs",
+		"github.com/trust-center",
+		"github.com/partners",
+		"github.com/open-source",
+		"github.com/topics",
+		"github.com/collections",
+		"github.com/pricing",
+		// "github.com", // we need to be able to still access repos ofc
+		"github.blog",
+
+		"goodreads.com", // temp until we fix 202 http handling
+
+		"githubstatus.com",
+	}
+
+	doneURLs   = []string{}
+	start      = time.Now()
+	allItems   AllURLItems
+	allItemsMu sync.Mutex
+	jsonPath   = "web/test.json"
+)
+
+var httpClient = &http.Client{
+	Timeout: 15 * time.Second,
 }
 
-var doneURLs = []string{}
-
-var start = time.Now()
-
 func main() {
+	loadURLItems()
 
-	// if we dont scrape 1 url first, it gives an index out of range later for some reason
-	_, newURLs, err := Scrape(URLs[0])
-	newURLs = removeFromSlice(newURLs, 0)
-	URLs = append(URLs, newURLs...)
-	doneURLs = append(doneURLs, URLs[0])
+	if len(URLs) == 0 {
+		log.Fatal("no seed URL")
+	}
 
+	seed := URLs[0]
+
+	_, firstURLs, err := Scrape(seed)
 	if err {
 		log.Fatal("error scraping seed")
 	}
 
-	printHeader()
+	// Remove seed from queue and mark it done.
+	URLs = URLs[1:]
+	doneURLs = append(doneURLs, seed)
 
-	for !stop {
-		// go through all queued URLs
-
-		for i := range URLs {
-			URL := URLs[i]
-
-			// if the URL is absolute and has not been processed before, continue
-			if (strings.HasPrefix(URL, "http://") || strings.HasPrefix(URL, "https://")) && !slices.Contains(doneURLs, URL) {
-
-				// scrape it
-				go func() {
-					_, newURLs, err := Scrape(URL)
-
-					if !err {
-						// go through all newly found URLs
-						for j := range newURLs {
-
-							// if is not already been processed or queued and it is absolute, add it to queue
-							if (strings.HasPrefix(URL, "http://") || strings.HasPrefix(URL, "https://")) && !slices.Contains(doneURLs, newURLs[j]) && !slices.Contains(URLs, newURLs[j]) {
-								URLs = append(URLs, newURLs[j])
-							}
-						}
-					}
-
-				}()
-
-				// remove processed URL from queue and add to doneURLs
-				URLs = removeFromSlice(URLs, i)
-				doneURLs = append(doneURLs, URL)
-				u := URLItem{URL, newURLs, 1}
-				saveUrlItem(u)
-				clear()
-				printStats()
-				sleep(200)
-			}
+	// Queue only the links we've actually not seen before.
+	// We build a separate slice so we don't mutate firstURLs while iterating it.
+	seedNew := []string{}
+	for _, link := range firstURLs {
+		link, ok := normalizeURL(link)
+		if !ok {
+			continue
 		}
+		if link == seed {
+			continue
+		}
+		if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
+			continue
+		}
+		if slices.Contains(URLs, link) || slices.Contains(doneURLs, link) {
+			continue
+		}
+		if isBlacklisted(link) {
+			continue
+		}
+		URLs = append(URLs, link)
+		seedNew = append(seedNew, link)
 	}
 
+	saveUrlItem(URLItem{
+		URL:       seed,
+		Links:     seedNew,
+		ScrapedAt: time.Now().Unix(),
+	})
+
+	printHeader()
+
+	for !stop && len(URLs) > 0 {
+		URL := URLs[0]
+		URLs = URLs[1:]
+
+		if !strings.HasPrefix(URL, "http://") && !strings.HasPrefix(URL, "https://") {
+			continue
+		}
+		if slices.Contains(doneURLs, URL) {
+			continue
+		}
+
+		title, foundURLs, err := Scrape(URL)
+		if err {
+			print("error scraping: " + URL)
+			doneURLs = append(doneURLs, URL)
+			continue
+		}
+
+		// Build a fresh slice of only the links we queued.
+		// Do NOT mutate foundURLs while ranging over it.
+		newLinks := []string{}
+		for _, link := range foundURLs {
+			link, ok := normalizeURL(link)
+			if !ok {
+				continue
+			}
+			if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
+				continue
+			}
+			if slices.Contains(doneURLs, link) || slices.Contains(URLs, link) {
+				continue
+			}
+			if isBlacklisted(link) || strings.Contains(link, URL) {
+				continue
+			}
+			URLs = append(URLs, link)
+			newLinks = append(newLinks, link)
+		}
+
+		doneURLs = append(doneURLs, URL)
+
+		saveUrlItem(URLItem{
+			Title:     title,
+			URL:       URL,
+			Links:     newLinks,
+			ScrapedAt: time.Now().Unix(),
+		})
+
+		clear()
+		printStats()
+		sleep(200)
+	}
+
+	clear()
+	printStats()
 }
 
 // intercept ctrl + c
@@ -197,7 +328,6 @@ func init() {
 		stop = true
 		clear()
 		printStats()
-		os.Exit(0)
 	}()
 }
 
@@ -207,67 +337,108 @@ func Scrape(URL string) (string, []string, bool) {
 		return "", []string{}, true
 	}
 
-	u, err := url.Parse(URL)
-	domain := u.Hostname()
+	base, err := url.Parse(URL)
+	if err != nil {
+		print("url.Parse: " + err.Error())
+		return "", []string{}, true
+	}
 
-	res, err := http.Get(URL)
+	res, err := httpClient.Get(URL)
 	if err != nil {
 		print(err.Error())
 		return "", []string{}, true
 	}
 	defer res.Body.Close()
+
 	if res.StatusCode != 200 {
 		print("wierd statuscode: " + strconv.Itoa(res.StatusCode) + " " + URL)
 		return "", []string{}, true
 	}
 
-	// Load the HTML document
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	if err != nil {
 		print(err.Error())
-		return "", []string{}, false
+		return "", []string{}, true
 	}
 
-	// Find the title
 	title := doc.Find("title").First().Text()
 
-	// Find URLs
+	seen := map[string]bool{}
 	var foundURLs []string
+
 	doc.Find("a").Each(func(i int, s *goquery.Selection) {
-		URL, exists := s.Attr("href")
-		if exists {
-			if !strings.HasPrefix(URL, "http://") && !strings.HasPrefix(URL, "https://") {
-				URL = "https://" + domain + URL
-			}
-			foundURLs = append(foundURLs, URL)
+		href, exists := s.Attr("href")
+		if !exists {
+			return
+		}
+
+		ref, err := url.Parse(href)
+		if err != nil {
+			return
+		}
+
+		resolved := base.ResolveReference(ref)
+		if resolved.Scheme != "http" && resolved.Scheme != "https" {
+			return
+		}
+
+		resolved.Fragment = ""
+		link, ok := normalizeURL(resolved.String())
+		if !ok {
+			return
+		}
+
+		if !seen[link] {
+			seen[link] = true
+			foundURLs = append(foundURLs, link)
 		}
 	})
 
 	return title, foundURLs, false
+}
 
+func loadURLItems() {
+	dat, err := os.ReadFile(jsonPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			printl("failed to read file: " + err.Error())
+		}
+		allItems = AllURLItems{}
+		return
+	}
+
+	if err := json.Unmarshal(dat, &allItems); err != nil {
+		printl("error unmarshalling: " + err.Error())
+		allItems = AllURLItems{}
+	}
 }
 
 func saveUrlItem(u URLItem) {
+	allItemsMu.Lock()
+	defer allItemsMu.Unlock()
 
-	dat, err := os.ReadFile("test.json")
+	// Append to the in-memory copy we already loaded instead of
+	// re-reading the file every time.
+	allItems.AllURLItems = append(allItems.AllURLItems, u)
 
-	if err != nil {
-		log.Fatal("failed to read file")
+	b := toJSON(allItems)
+
+	// Write to a temp file, then rename so a Ctrl+C mid-write
+	// doesn't leave test.json truncated/corrupted.
+	tmp := jsonPath + ".tmp"
+	if err := os.WriteFile(tmp, b, 0644); err != nil {
+		log.Fatal("failed to write temp file: ", err)
 	}
-
-	aui := AllURLItems{}
-
-	err = json.Unmarshal(dat, &aui)
-
-	if err != nil {
-		print("error with unmarshalling, continueing with an empty start aui")
+	if err := os.Rename(tmp, jsonPath); err != nil {
+		log.Fatal("failed to rename temp file: ", err)
 	}
+}
 
-	aui.AllURLItems = append(aui.AllURLItems, u)
-
-	b := toJSON(aui)
-	err = os.WriteFile("test.json", b, 0644)
-	if err != nil {
-		log.Fatal("failed to write to file")
+func isBlacklisted(link string) bool {
+	for _, b := range blacklisted {
+		if strings.Contains(link, b) {
+			return true
+		}
 	}
+	return false
 }
