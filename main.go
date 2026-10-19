@@ -14,11 +14,10 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -36,14 +35,7 @@ func runCmd(name string, arg ...string) {
 }
 
 func clear() {
-	switch runtime.GOOS {
-	case "darwin":
-		runCmd("clear")
-	case "linux":
-		runCmd("clear")
-	default:
-		runCmd("clear")
-	}
+	runCmd("clear")
 }
 
 func print(msg string) {
@@ -53,10 +45,6 @@ func print(msg string) {
 // print as log
 func printl(msg string) {
 	log.Print(msg)
-}
-
-func goofyprint(msg string) { // print without newline
-	fmt.Print(msg)
 }
 
 func sleep(milliseconds int) {
@@ -72,26 +60,10 @@ func printHeader() {
 	print("")
 }
 
-// the queued stat is not shown right for some reason
-// it does work when we print len(URLs) inside main manually
 func printStats() {
 	print("ELAPSED: " + time.Since(start).Round(10*time.Millisecond).String())
 	print("DONE:    " + strconv.Itoa(len(doneURLs)))
 	print("QUEUED:  " + strconv.Itoa(len(URLs)))
-}
-
-// go has no built-in functionality for removing an element from a slice
-func removeFromSliceByIndex(a []string, i int) []string {
-	a = append(a[:i], a[i+1:]...)
-	return a
-}
-
-// doestn seem to work...
-func timer(name string) func() {
-	start := time.Now()
-	return func() {
-		fmt.Printf("[%s]: %s\n", name, time.Since(start))
-	}
 }
 
 func toJSON(data any) []byte {
@@ -139,13 +111,19 @@ func normalizeURL(raw string) (string, bool) {
 	return u.String(), true
 }
 
+// atomicWriteJSON serialises v and swaps it into path via a temp file,
+// so a crash mid-write can't leave path truncated.
+func atomicWriteJSON(path string, v any) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, toJSON(v), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 // --------------------------------------------------
 // JSON shi
 // --------------------------------------------------
-
-type AllURLItems struct {
-	AllURLItems []URLItem `json:"urls"`
-}
 
 type URLItem struct {
 	Title     string   `json:"title"`
@@ -159,13 +137,14 @@ type URLItem struct {
 // --------------------------------------------------
 
 var (
-	stop = false
-	// URLs = []string{"http://localhost:8000"}
-	// URLs = []string{"https://github.com/hackerkid/Mind-Expanding-Books"}
-	URLs = []string{"https://awesome-poetry.top/huajianji/"}
+	stop atomic.Bool
+
+	// URLs is the crawl queue. Restored from db/queue.json on startup,
+	// seeded with `seed` on a truly fresh run.
+	URLs = []string{}
+	seed = "https://awesome-poetry.top/huajianji/"
 
 	// for this PoC we skip uninteresting sources
-
 	blacklisted = []string{
 		"github.com/login",
 		"github.com/mcp",
@@ -201,11 +180,10 @@ var (
 		"githubstatus.com",
 	}
 
-	doneURLs   = []string{}
-	start      = time.Now()
-	allItems   AllURLItems
-	allItemsMu sync.Mutex
-	jsonPath   = "web/test.json"
+	doneURLs = []string{}
+	start    = time.Now()
+	dbPath   = "db/"
+	urlsPath = dbPath + "urls.jsonl"
 )
 
 var httpClient = &http.Client{
@@ -213,56 +191,20 @@ var httpClient = &http.Client{
 }
 
 func main() {
-	loadURLItems()
-
-	if len(URLs) == 0 {
-		log.Fatal("no seed URL")
-	}
-
-	seed := URLs[0]
-
-	_, firstURLs, err := Scrape(seed)
-	if err {
-		log.Fatal("error scraping seed")
-	}
-
-	// Remove seed from queue and mark it done.
-	URLs = URLs[1:]
-	doneURLs = append(doneURLs, seed)
-
-	// Queue only the links we've actually not seen before.
-	// We build a separate slice so we don't mutate firstURLs while iterating it.
-	seedNew := []string{}
-	for _, link := range firstURLs {
-		link, ok := normalizeURL(link)
-		if !ok {
-			continue
-		}
-		if link == seed {
-			continue
-		}
-		if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
-			continue
-		}
-		if slices.Contains(URLs, link) || slices.Contains(doneURLs, link) {
-			continue
-		}
-		if isBlacklisted(link) {
-			continue
-		}
-		URLs = append(URLs, link)
-		seedNew = append(seedNew, link)
-	}
-
-	saveUrlItem(URLItem{
-		URL:       seed,
-		Links:     seedNew,
-		ScrapedAt: time.Now().Unix(),
-	})
-
 	printHeader()
 
-	for !stop && len(URLs) > 0 {
+	initDB()
+	loadProgress()
+
+	// Only seed on a truly fresh run. On resume, the queue comes from disk;
+	// on a completed crawl both are empty and there's nothing to do.
+	if len(URLs) == 0 && len(doneURLs) == 0 {
+		URLs = []string{seed}
+	}
+
+	lastSave := time.Now()
+
+	for !stop.Load() && len(URLs) > 0 {
 		URL := URLs[0]
 		URLs = URLs[1:]
 
@@ -303,31 +245,44 @@ func main() {
 
 		doneURLs = append(doneURLs, URL)
 
-		saveUrlItem(URLItem{
+		if err := saveUrlItem(URLItem{
 			Title:     title,
 			URL:       URL,
 			Links:     newLinks,
 			ScrapedAt: time.Now().Unix(),
-		})
+		}); err != nil {
+			// One bad append isn't fatal — log it and keep crawling.
+			printl("failed to save URLItem: " + err.Error())
+		}
 
 		clear()
 		printStats()
+
+		// Persist crawl state periodically so a SIGKILL loses at most
+		// the last window of work. urls.jsonl already survives line-by-line.
+		if time.Since(lastSave) > 30*time.Second {
+			saveProgress(doneURLs, URLs)
+			lastSave = time.Now()
+		}
+
 		sleep(200)
 	}
 
 	clear()
 	printStats()
+	saveProgress(doneURLs, URLs)
 }
 
 // intercept ctrl + c
-func init() {
+func init() { // signal handler
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
-		stop = true
-		clear()
-		printStats()
+		stop.Store(true)
+		// Restore default signal handling so a second Ctrl+C actually
+		// kills the process if it's stuck in a long network call.
+		signal.Stop(c)
 	}()
 }
 
@@ -397,41 +352,20 @@ func Scrape(URL string) (string, []string, bool) {
 	return title, foundURLs, false
 }
 
-func loadURLItems() {
-	dat, err := os.ReadFile(jsonPath)
+// saveUrlItem appends one record to urls.jsonl.
+// Opening with O_APPEND means we never rewrite the file, so a crash
+// mid-write loses at most the partial last line — every earlier line
+// is still valid JSON.
+func saveUrlItem(u URLItem) error {
+	f, err := os.OpenFile(urlsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			printl("failed to read file: " + err.Error())
-		}
-		allItems = AllURLItems{}
-		return
+		return err
 	}
+	defer f.Close()
 
-	if err := json.Unmarshal(dat, &allItems); err != nil {
-		printl("error unmarshalling: " + err.Error())
-		allItems = AllURLItems{}
-	}
-}
-
-func saveUrlItem(u URLItem) {
-	allItemsMu.Lock()
-	defer allItemsMu.Unlock()
-
-	// Append to the in-memory copy we already loaded instead of
-	// re-reading the file every time.
-	allItems.AllURLItems = append(allItems.AllURLItems, u)
-
-	b := toJSON(allItems)
-
-	// Write to a temp file, then rename so a Ctrl+C mid-write
-	// doesn't leave test.json truncated/corrupted.
-	tmp := jsonPath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0644); err != nil {
-		log.Fatal("failed to write temp file: ", err)
-	}
-	if err := os.Rename(tmp, jsonPath); err != nil {
-		log.Fatal("failed to rename temp file: ", err)
-	}
+	enc := json.NewEncoder(f)
+	enc.SetEscapeHTML(false) // match the old toJSON behaviour
+	return enc.Encode(u)     // Encode appends a trailing "\n"
 }
 
 func isBlacklisted(link string) bool {
@@ -441,4 +375,61 @@ func isBlacklisted(link string) bool {
 		}
 	}
 	return false
+}
+
+// saveProgress persists crawl state to disk. Done list and queue go to
+// separate files so neither clobbers the other, and neither touches
+// urls.jsonl (that's the crawl output, owned by saveUrlItem).
+func saveProgress(done []string, queue []string) {
+
+	print("saving progress...")
+
+	if err := atomicWriteJSON(dbPath+"done.json", done); err != nil {
+		printl("failed to save done.json: " + err.Error())
+	}
+	if err := atomicWriteJSON(dbPath+"queue.json", queue); err != nil {
+		printl("failed to save queue.json: " + err.Error())
+	}
+
+	print("progress saved.")
+}
+
+// loadProgress restores crawl state. Missing files = fresh crawl.
+// A corrupt file is reported and treated as empty so we don't silently
+// crawl with half-loaded state.
+func loadProgress() {
+	if dat, err := os.ReadFile(dbPath + "done.json"); err == nil {
+		if err := json.Unmarshal(dat, &doneURLs); err != nil {
+			printl("corrupt done.json, starting fresh: " + err.Error())
+			doneURLs = nil
+		}
+	}
+	if dat, err := os.ReadFile(dbPath + "queue.json"); err == nil {
+		if err := json.Unmarshal(dat, &URLs); err != nil {
+			printl("corrupt queue.json, starting fresh: " + err.Error())
+			URLs = nil
+		}
+	}
+}
+
+func initDB() {
+	// 1. Ensure the db/ directory exists. MkdirAll is a no-op when the
+	//    directory is already there, so it's safe to call on every run.
+	//    urls.jsonl itself is created lazily by saveUrlItem via O_CREATE.
+	if err := os.MkdirAll(dbPath, 0755); err != nil {
+		log.Fatal("could not create db directory: ", err)
+	}
+
+	// 2. Sweep away stale .tmp files from a previous run that was killed
+	//    before it could rename them into place. urls.jsonl is append-only
+	//    so it has no tmp file — only done.json/queue.json do.
+	stale := []string{
+		dbPath + "done.json.tmp",
+		dbPath + "queue.json.tmp",
+	}
+	for _, f := range stale {
+		if _, err := os.Stat(f); err == nil {
+			_ = os.Remove(f)
+		}
+	}
 }
