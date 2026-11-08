@@ -27,12 +27,12 @@ func clear() {
 	runCmd("clear")
 }
 
-func print(msg string) {
+func print(msg any) {
 	fmt.Println(msg)
 }
 
 // print as log
-func printl(msg string) {
+func printl(msg any) {
 	log.Print(msg)
 }
 
@@ -70,7 +70,7 @@ func toJSON(data any) []byte {
 // normalizeURL canonicalizes a URL so equivalent forms compare equal.
 // Returns ok=false if the URL is not http(s) or can't be parsed.
 func normalizeURL(raw string) (string, bool) {
-	u, err := url.Parse(raw)
+	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return "", false
 	}
@@ -82,19 +82,19 @@ func normalizeURL(raw string) (string, bool) {
 	}
 
 	u.Fragment = ""
+	u.RawFragment = ""
 	u.Host = strings.ToLower(u.Host)
 
-	// Drop default ports.
-	if (u.Scheme == "http" && strings.HasSuffix(u.Host, ":80")) ||
-		(u.Scheme == "https" && strings.HasSuffix(u.Host, ":443")) {
-		u.Host = u.Host[:strings.LastIndex(u.Host, ":")]
+	// Strip default port using the URL helpers so [ipv6]:port works.
+	port := u.Port()
+	if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+		u.Host = u.Hostname()
 	}
 
-	// Collapse trailing slash: "/" and "" are the same; "/foo/" and "/foo" are the same.
-	if u.Path == "/" {
-		u.Path = ""
-	} else {
-		u.Path = strings.TrimSuffix(u.Path, "/")
+	// Strip ALL trailing slashes: "/" and "" are the same, "foo//" -> "foo".
+	u.Path = strings.TrimRight(u.Path, "/")
+	if u.RawPath != "" {
+		u.RawPath = strings.TrimRight(u.RawPath, "/")
 	}
 
 	return u.String(), true
@@ -114,7 +114,7 @@ func atomicWriteJSON(path string, v any) error {
 //  more specific functions
 // --------------------------------------------------
 
-// TODO: save text body and/or html body 
+// TODO: save text body and/or html body
 
 // saveUrlItem appends one record to urls.jsonl.
 // Opening with O_APPEND means we never rewrite the file, so a crash

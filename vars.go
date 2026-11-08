@@ -49,8 +49,9 @@ var (
 		"githubstatus.com",
 	}
 
-	doneURLs = []string{}
-	start    = time.Now()
-	dbPath   = "db/"
-	urlsPath = dbPath + "urls.jsonl"
+	doneURLs      = []string{}
+	start         = time.Now()
+	dbPath        = "db/"
+	urlsPath      = dbPath + "urls.jsonl"
+	backlinksPath = dbPath + "backlinks.json"
 )

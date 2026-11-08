@@ -39,13 +39,6 @@ var httpClient = &http.Client{
 // Rebuilt on startup from urls.jsonl; kept in memory while crawling.
 var backlinks = map[string][]string{}
 
-// If these filenames already exist as constants elsewhere in the project,
-// delete these two and use yours instead.
-const (
-	urlsFile      = "urls.jsonl"
-	backlinksFile = "backlinks.json"
-)
-
 func appendUnique(s []string, v string) []string {
 	for _, x := range s {
 		if x == v {
@@ -58,7 +51,7 @@ func appendUnique(s []string, v string) []string {
 // loadBacklinks rebuilds the reverse index from every URLItem already on disk.
 // Safe to call on a missing file (first run).
 func loadBacklinks() {
-	f, err := os.Open(urlsFile)
+	f, err := os.Open(urlsPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return
@@ -98,12 +91,12 @@ func saveBacklinks(bl map[string][]string) {
 		printl("failed to marshal backlinks: " + err.Error())
 		return
 	}
-	tmp := backlinksFile + ".tmp"
+	tmp := backlinksPath + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		printl("failed to write backlinks temp: " + err.Error())
 		return
 	}
-	if err := os.Rename(tmp, backlinksFile); err != nil {
+	if err := os.Rename(tmp, backlinksPath); err != nil {
 		printl("failed to rename backlinks file: " + err.Error())
 	}
 }
@@ -126,6 +119,12 @@ func main() {
 	for !stop.Load() && len(URLs) > 0 {
 		URL := URLs[0]
 		URLs = URLs[1:]
+
+		normalized, ok := normalizeURL(URL)
+		if !ok {
+			continue
+		}
+		URL = normalized
 
 		if !strings.HasPrefix(URL, "http://") && !strings.HasPrefix(URL, "https://") {
 			continue
@@ -209,6 +208,8 @@ func main() {
 	printStats()
 	saveProgress(doneURLs, URLs)
 	saveBacklinks(backlinks)
+	ranks := PageRanks()
+	print(ranks)
 }
 
 // intercept ctrl + c
