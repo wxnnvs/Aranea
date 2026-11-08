@@ -115,6 +115,8 @@ func atomicWriteJSON(path string, v any) error {
 //  more specific functions
 // --------------------------------------------------
 
+// TODO: save text body and/or html body 
+
 // saveUrlItem appends one record to urls.jsonl.
 // Opening with O_APPEND means we never rewrite the file, so a crash
 // mid-write loses at most the partial last line — every earlier line
