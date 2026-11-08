@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -199,20 +198,20 @@ func initDB() {
 	}
 }
 
-func isScrapable(link string) bool {
-	link, ok := normalizeURL(link)
-	if !ok {
-		return false
-	}
-	if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
-		return false
-	}
-	if slices.Contains(doneURLs, link) || slices.Contains(URLs, link) {
-		return false
-	}
-	// if isBlacklisted(link) || strings.Contains(link, URL) {
-	if isBlacklisted(link) {
-		return false
-	}
-	return true
-}
+// func isScrapable(link string) bool {
+// 	link, ok := normalizeURL(link)
+// 	if !ok {
+// 		return false
+// 	}
+// 	if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
+// 		return false
+// 	}
+// 	if slices.Contains(doneURLs, link) || slices.Contains(URLs, link) {
+// 		return false
+// 	}
+// 	// if isBlacklisted(link) || strings.Contains(link, URL) {
+// 	if isBlacklisted(link) {
+// 		return false
+// 	}
+// 	return true
+// }
