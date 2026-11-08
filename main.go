@@ -133,6 +133,7 @@ func init() { // signal handler
 	}()
 }
 
+// TODO: also return text body and/or html body 
 func Scrape(URL string) (string, []string, bool) {
 	if !strings.HasPrefix(URL, "http://") && !strings.HasPrefix(URL, "https://") {
 		print("Error: this URL doesnt start with http(s): " + URL)
