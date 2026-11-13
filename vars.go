@@ -11,7 +11,7 @@ var (
 	// URLs is the crawl queue. Restored from db/queue.json on startup,
 	// seeded with `seed` on a truly fresh run.
 	URLs = []string{}
-	seed = "https://awesome-poetry.top/huajianji/"
+	seed = "https://ooh.directory"
 
 	// for this PoC we skip uninteresting sources
 	blacklisted = []string{
@@ -47,6 +47,8 @@ var (
 		"goodreads.com", // temp until we fix 202 http handling
 
 		"githubstatus.com",
+
+		"instapods.com",
 	}
 
 	doneURLs      = []string{}
@@ -54,4 +56,6 @@ var (
 	dbPath        = "db/"
 	urlsPath      = dbPath + "urls.jsonl"
 	backlinksPath = dbPath + "backlinks.json"
+
+	userAgent = "aranea/0.0 (+https://blog.wannesg.be)"
 )

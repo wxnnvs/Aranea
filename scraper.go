@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -20,7 +21,14 @@ func Scrape(URL string) (string, []string, bool) {
 		return "", []string{}, true
 	}
 
-	res, err := httpClient.Get(URL)
+	req, err := http.NewRequest(http.MethodGet, URL, nil)
+	if err != nil {
+		print("http.NewRequest: " + err.Error())
+		return "", []string{}, true
+	}
+	req.Header.Set("User-Agent", userAgent)
+
+	res, err := httpClient.Do(req)
 	if err != nil {
 		print(err.Error())
 		return "", []string{}, true
