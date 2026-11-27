@@ -96,6 +96,9 @@ func normalizeURL(raw string) (string, bool) {
 	if u.RawPath != "" {
 		u.RawPath = strings.TrimRight(u.RawPath, "/")
 	}
+	
+	// strip ALL query parameters, lets hope this doesnt break too much
+	u.RawQuery = ""
 
 	return u.String(), true
 }

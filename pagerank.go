@@ -185,7 +185,7 @@ func PageRanks() map[string]float64 {
 		return nil
 	}
 
-	ranks := ComputePageRank(pages, backlinks, outdegree, 0.0001, 70)
+	ranks := ComputePageRank(pages, backlinks, outdegree, 0.0001, 100)
 
 	// Keep only pages that emit at least one link (i.e. crawled pages
 	// with real content). Everything else is a phantom target node.
@@ -195,7 +195,7 @@ func PageRanks() map[string]float64 {
 	names := make([]string, 0, len(pages))
 	values := make([]float64, 0, len(pages))
 	for i, p := range pages {
-		if outdegree[p] > 0 && !strings.Contains(p, "ooh.directory") {
+		if outdegree[p] > 0 && !strings.Contains(p, seed) {
 			names = append(names, p)
 			values = append(values, ranks[i])
 		}
@@ -208,4 +208,50 @@ func PageRanks() map[string]float64 {
 		out[n] = values[i]
 	}
 	return out
+}
+
+// SavePageRanks writes the URL -> rank map to disk atomically so a later
+// run (search, ranking UI, offline analysis) can load it without recomputing.
+// Same temp-then-rename strategy as saveBacklinks: a crash mid-write never
+// leaves a half-written file, the old one stays valid until the new one
+// is complete.
+func SavePageRanks(ranks map[string]float64) {
+	if len(ranks) == 0 {
+		// Empty crawl or no ranks computed; don't clobber a good file.
+		printl("skipping pagerank save: no ranks to write")
+		return
+	}
+	data, err := json.MarshalIndent(ranks, "", "  ")
+	if err != nil {
+		printl("failed to marshal pageranks: " + err.Error())
+		return
+	}
+	tmp := pageRankPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		printl("failed to write pageranks temp: " + err.Error())
+		return
+	}
+	if err := os.Rename(tmp, pageRankPath); err != nil {
+		printl("failed to rename pageranks file: " + err.Error())
+	}
+}
+
+// LoadPageRanks reads the saved URL -> rank map. Returns nil if the file
+// doesn't exist yet (PageRank has never been computed) or can't be parsed.
+// Callers should treat nil as "no ranks available" and degrade gracefully
+// (e.g. sort by recency instead, or just don't rank).
+func LoadPageRanks() map[string]float64 {
+	data, err := os.ReadFile(pageRankPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			printl("failed to read pageranks: " + err.Error())
+		}
+		return nil
+	}
+	var ranks map[string]float64
+	if err := json.Unmarshal(data, &ranks); err != nil {
+		printl("failed to parse pageranks: " + err.Error())
+		return nil
+	}
+	return ranks
 }

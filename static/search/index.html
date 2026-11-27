@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Search</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 40rem;
+      margin: 3rem auto;
+      padding: 0 1rem;
+    }
+    #search {
+      width: 100%;
+      padding: 0.6rem 0.8rem;
+      font-size: 1rem;
+      box-sizing: border-box;
+    }
+    #results {
+      list-style: none;
+      padding: 0;
+      margin-top: 1rem;
+    }
+    #results li {
+      padding: 0.5rem 0.8rem;
+      border-bottom: 1px solid #eee;
+    }
+    #results li a {
+      color: #1a5fb4;
+      text-decoration: none;
+    }
+    #results li a:hover {
+      text-decoration: underline;
+    }
+    #results li .url {
+      display: block;
+      color: #888;
+      font-size: 0.85rem;
+      word-break: break-all;
+    }
+    #status {
+      color: #888;
+      font-size: 0.9rem;
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Search</h1>
+
+  <input id="search" type="search" placeholder="Type to search…" autofocus autocomplete="off">
+  <ul id="results"></ul>
+  <p id="status"></p>
+
+  <script>
+    const input   = document.getElementById('search');
+    const results = document.getElementById('results');
+    const status  = document.getElementById('status');
+
+    let debounceTimer;
+
+    input.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(runSearch, 250);
+    });
+
+    async function runSearch() {
+      const q = input.value.trim();
+
+      if (!q) {
+        results.replaceChildren();
+        status.textContent = '';
+        return;
+      }
+
+      status.textContent = 'Searching…';
+
+      try {
+        const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+
+        if (!res.ok) {
+          // The server sends {"error": "..."} on failure — surface that text.
+          let msg = `HTTP ${res.status}`;
+          try {
+            const body = await res.json();
+            if (body && body.error) msg = body.error;
+          } catch (_) { /* body wasn't JSON, keep the status text */ }
+          throw new Error(msg);
+        }
+
+        const data = await res.json();
+
+        results.replaceChildren(
+          ...data.results.map(({ title, url }) => {
+            const li = document.createElement('li');
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.textContent = title;      // textContent, not innerHTML → XSS-safe
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+
+            const urlSpan = document.createElement('span');
+            urlSpan.className = 'url';
+            urlSpan.textContent = url;
+
+            li.append(a, urlSpan);
+            return li;
+          })
+        );
+
+        status.textContent =
+          data.results.length === 0
+            ? 'No results.'
+            : `${data.results.length} result(s) for “${q}”.`;
+
+      } catch (err) {
+        results.replaceChildren();
+        status.textContent = 'Search failed: ' + err.message;
+      }
+    }
+  </script>
+</body>
+</html>

@@ -11,44 +11,28 @@ var (
 	// URLs is the crawl queue. Restored from db/queue.json on startup,
 	// seeded with `seed` on a truly fresh run.
 	URLs = []string{}
-	seed = "https://ooh.directory"
+	
+	// seed = "https://ooh.directory"
+	seed = "https://sint-barbara.be"
 
 	// for this PoC we skip uninteresting sources
 	blacklisted = []string{
-		"github.com/login",
-		"github.com/mcp",
-		"github.com/features",
-		"github.com/signup",
-		"github.com/contact",
-		"github.com/resources",
-		".github.com",
-		"github.com/solutions",
-		"/blob/",
-		"/tree/",
 		"githubusercontent.com",
 		"google.com",
-		"github.com/security",
-		"github.com/why-github",
-		"github.com/blog",
-		"github.com/marketplace",
-		"github.com/enterprise",
-		"github.com/team",
-		"github.com/customer-stories",
-		"github.com/orgs",
-		"github.com/trust-center",
-		"github.com/partners",
-		"github.com/open-source",
-		"github.com/topics",
-		"github.com/collections",
-		"github.com/pricing",
-		// "github.com", // we need to be able to still access repos ofc
+		
+		"github.com", // the bloat here is not worth the value
 		"github.blog",
+		"githubstatus.com",
 
 		"goodreads.com", // temp until we fix 202 http handling
 
-		"githubstatus.com",
-
 		"instapods.com",
+
+		"googleusercontent.com",
+		"google.com",
+		"buymeacoffee.com",
+
+	//	"notiz.blog", // for now, todo: strip query parameters in url
 	}
 
 	doneURLs      = []string{}
@@ -56,6 +40,7 @@ var (
 	dbPath        = "db/"
 	urlsPath      = dbPath + "urls.jsonl"
 	backlinksPath = dbPath + "backlinks.json"
+	pageRankPath  = dbPath + "pagerank.json"
 
 	userAgent = "aranea/0.0 (+https://blog.wannesg.be)"
 )

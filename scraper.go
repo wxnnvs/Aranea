@@ -9,44 +9,45 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
-func Scrape(URL string) (string, []string, bool) {
+func Scrape(URL string) (string, string, []string, bool) {
 	if !strings.HasPrefix(URL, "http://") && !strings.HasPrefix(URL, "https://") {
 		print("Error: this URL doesnt start with http(s): " + URL)
-		return "", []string{}, true
+		return "", "", []string{}, true
 	}
 
 	base, err := url.Parse(URL)
 	if err != nil {
 		print("url.Parse: " + err.Error())
-		return "", []string{}, true
+		return "", "", []string{}, true
 	}
 
 	req, err := http.NewRequest(http.MethodGet, URL, nil)
 	if err != nil {
 		print("http.NewRequest: " + err.Error())
-		return "", []string{}, true
+		return "", "", []string{}, true
 	}
 	req.Header.Set("User-Agent", userAgent)
 
 	res, err := httpClient.Do(req)
 	if err != nil {
 		print(err.Error())
-		return "", []string{}, true
+		return "", "", []string{}, true
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != 200 {
 		print("wierd statuscode: " + strconv.Itoa(res.StatusCode) + " " + URL)
-		return "", []string{}, true
+		return "", "", []string{}, true
 	}
 
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	if err != nil {
 		print(err.Error())
-		return "", []string{}, true
+		return "", "", []string{}, true
 	}
 
 	title := doc.Find("title").First().Text()
+	body := doc.Find("body").First().Text()
 
 	seen := map[string]bool{}
 	var foundURLs []string
@@ -79,5 +80,5 @@ func Scrape(URL string) (string, []string, bool) {
 		}
 	})
 
-	return title, foundURLs, false
+	return title, body, foundURLs, false
 }
