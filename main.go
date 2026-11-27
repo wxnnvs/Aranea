@@ -29,6 +29,7 @@ import (
 type URLItem struct {
 	Title     string   `json:"title"`
 	URL       string   `json:"url"`
+	Body      string   `json:"body"`
 	Links     []string `json:"links"` // ALL valid normalized outbound links on the page
 	ScrapedAt int64    `json:"scrapedAt"`
 }
@@ -145,6 +146,8 @@ func main() {
 	loadProgress()
 	loadBacklinks()
 
+	StartWebServer()
+
 	// Only seed on a truly fresh run. On resume, the queue comes from disk;
 	// on a completed crawl both are empty and there's nothing to do.
 	if len(URLs) == 0 && len(doneURLs) == 0 {
@@ -183,7 +186,7 @@ func main() {
 
 		// Fetch and parse the page. On failure, mark it done so we don't
 		// retry a broken URL forever, and move on.
-		title, foundURLs, err := Scrape(URL)
+		title, body, foundURLs, err := Scrape(URL)
 		if err {
 			print("error scraping: " + URL)
 			doneURLs = append(doneURLs, URL)
@@ -238,6 +241,7 @@ func main() {
 		if err := saveUrlItem(URLItem{
 			Title:     title,
 			URL:       URL,
+			Body:      body,
 			Links:     allLinks, // full outbound graph, not just queued URLs
 			ScrapedAt: time.Now().Unix(),
 		}); err != nil {
@@ -274,6 +278,7 @@ func main() {
 	// nodes (URLs we linked to but never crawled from) so the result
 	// describes real, content-bearing pages.
 	ranks := PageRanks()
+	SavePageRanks(ranks)
 
 	// Flatten the map into a slice so we can sort it. Maps in Go have
 	// randomized iteration order; without this the output would shuffle
